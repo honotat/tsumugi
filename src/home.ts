@@ -1238,12 +1238,8 @@ export class HomeScreen {
     } else if (home.startsWith('//?/')) {
       home = home.substring(4);
     }
-    // ~ を使ってパスを短縮する
-    const homeDir = home.includes('/Users/')
-      ? home.replace(/^\/Users\/[^/]+/, '~')
-      : home.includes('\\Users\\')
-        ? home.replace(/^.*?\\Users\\[^\\]+/, '~')
-        : home;
+    // 区切り正規化済みパスを ~ で短縮
+    const homeDir = home.replace(/^(?:[A-Za-z]:)?\/Users\/[^/]+/, '~');
     // ディレクトリのみ表示する（ファイル名を除去）
     const lastSlash = homeDir.lastIndexOf('/');
     if (lastSlash > 0) {

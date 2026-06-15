@@ -29,11 +29,18 @@ pub(crate) fn validate_path(path: &str) -> Result<std::path::PathBuf, String> {
     // 機密性の高いシステムディレクトリをブロック
     let path_str = canonical.to_string_lossy();
     let mut blocked: Vec<String> = if cfg!(target_os = "windows") {
-        vec![
-            "C:\\Windows".to_string(),
-            "C:\\Program Files".to_string(),
-            "C:\\Program Files (x86)".to_string(),
-        ]
+        // ドライブレター決め打ちを避け環境変数から取得
+        let mut v = Vec::new();
+        if let Ok(windir) = std::env::var("SystemRoot").or_else(|_| std::env::var("windir")) {
+            v.push(windir);
+        }
+        if let Ok(pf) = std::env::var("ProgramFiles") {
+            v.push(pf);
+        }
+        if let Ok(pf86) = std::env::var("ProgramFiles(x86)") {
+            v.push(pf86);
+        }
+        v
     } else {
         vec![
             "/etc".to_string(),
@@ -56,24 +63,58 @@ pub(crate) fn validate_path(path: &str) -> Result<std::path::PathBuf, String> {
             blocked.push(format!("{}/.gnupg", home_str));
         }
     }
+    // Windowsは大文字小文字を区別しないため小文字化して比較
+    let case_insensitive = cfg!(target_os = "windows");
+    let target = if case_insensitive {
+        path_str.to_lowercase()
+    } else {
+        path_str.to_string()
+    };
     for prefix in &blocked {
-        if path_str.starts_with(prefix.as_str()) {
+        let needle = if case_insensitive {
+            prefix.to_lowercase()
+        } else {
+            prefix.clone()
+        };
+        if target.starts_with(&needle) {
             return Err(format!("Access denied: {}", prefix));
         }
     }
     Ok(canonical)
 }
 
+/// ドキュメントを読み込み、先頭のUTF-8 BOMを除去する
+pub(crate) fn read_document<P: AsRef<std::path::Path>>(path: P) -> std::io::Result<String> {
+    let mut s = std::fs::read_to_string(path)?;
+    if s.starts_with('\u{feff}') {
+        s.remove(0);
+    }
+    Ok(s)
+}
+
+/// 一時ファイルへ書いてから rename するアトミック書き込み
+fn atomic_write(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+    let dir = path.parent().ok_or_else(|| "Invalid path".to_string())?;
+    // 別ボリュームへの rename を避けるため同一ディレクトリに作る
+    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
+    let tmp = dir.join(format!(".{}.{}.tmp", file_name, std::process::id()));
+    std::fs::write(&tmp, bytes).map_err(|e| format!("Failed to write {}: {}", tmp.display(), e))?;
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("Failed to write {}: {}", path.display(), e)
+    })
+}
+
 #[command]
 pub fn read_file(path: String) -> Result<String, String> {
     let path = validate_path(&path)?.to_string_lossy().to_string();
-    std::fs::read_to_string(&path).map_err(|e| format!("Failed to read {}: {}", path, e))
+    read_document(&path).map_err(|e| format!("Failed to read {}: {}", path, e))
 }
 
 #[command]
 pub fn save_file(path: String, content: String) -> Result<(), String> {
-    let path = validate_path(&path)?.to_string_lossy().to_string();
-    std::fs::write(&path, &content).map_err(|e| format!("Failed to write {}: {}", path, e))
+    let path = validate_path(&path)?;
+    atomic_write(&path, content.as_bytes())
 }
 
 #[command]
@@ -88,6 +129,7 @@ pub fn notify_saved(
         let mut guard = states.lock().unwrap();
         if let Some(state) = guard.get_mut(window.label()) {
             state.saved_path = Some(path.clone());
+            state.path_disclosure = true;
             state.saved_content = state.current_content.clone();
             state.dirty = false;
             Some(state.current_content.clone())
@@ -185,6 +227,7 @@ pub fn rename_file(old_path: String, new_path: String, window: tauri::Window, st
     let mut states = states.lock().unwrap();
     if let Some(state) = states.get_mut(window.label()) {
         state.saved_path = Some(abs_path_str.clone());
+        state.path_disclosure = true;
         let title = abs_path
             .file_stem()
             .map(|f| f.to_string_lossy().to_string())
@@ -196,8 +239,8 @@ pub fn rename_file(old_path: String, new_path: String, window: tauri::Window, st
 
 #[command]
 pub fn save_binary_file(path: String, data: Vec<u8>) -> Result<(), String> {
-    let path = validate_path(&path)?.to_string_lossy().to_string();
-    std::fs::write(&path, &data).map_err(|e| format!("Failed to write {}: {}", path, e))
+    let path = validate_path(&path)?;
+    atomic_write(&path, &data)
 }
 
 #[command]

@@ -1,6 +1,18 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::{command, Manager as _};
+
+// PDFプロファイルを一意化するプロセス内カウンター
+static PDF_PROFILE_SEQ: AtomicU64 = AtomicU64::new(0);
+
+// スコープを抜けるときに一時プロファイルを削除する
+struct ProfileCleanup<'a>(&'a Path);
+impl Drop for ProfileCleanup<'_> {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(self.0);
+    }
+}
 
 use crate::commands::validate_path;
 use crate::http_api::{HttpServerInfo, PdfContentStore};
@@ -37,9 +49,12 @@ fn generate_pdf_with_browser(
 ) -> Result<(), String> {
     let output_arg = format!("--print-to-pdf={}", output_path.display());
 
-    // 既存Edgeとのプロファイル競合を回避するための一時プロファイル
-    let profile_dir = std::env::temp_dir().join("tsumugi-pdf-profile");
+    // 既存Edgeと競合しない一意な一時プロファイル
+    let seq = PDF_PROFILE_SEQ.fetch_add(1, Ordering::Relaxed);
+    let profile_dir = std::env::temp_dir()
+        .join(format!("tsumugi-pdf-profile-{}-{}", std::process::id(), seq));
     let user_data_arg = format!("--user-data-dir={}", profile_dir.display());
+    let _cleanup = ProfileCleanup(&profile_dir);
 
     // --no-pdf-header-footer を使用（新しいChromiumバージョン向け）
     let result = Command::new(browser)

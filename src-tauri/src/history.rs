@@ -1,7 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
-use std::hash::Hasher;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -140,7 +138,7 @@ impl HistoryStore {
 
         // インデックスを読み込み。なければJSONLからビルド
         let idx_path = index_path();
-        let index = if idx_path.exists() {
+        let mut index = if idx_path.exists() {
             std::fs::read_to_string(&idx_path)
                 .ok()
                 .and_then(|s| serde_json::from_str(&s).ok())
@@ -152,6 +150,11 @@ impl HistoryStore {
             }
             idx
         };
+
+        // 旧DefaultHasher時代の履歴ファイルを安定ハッシュ名へ移行
+        if migrate_legacy_hashes(&mut index) {
+            save_index_to_disk(&index);
+        }
 
         Self {
             config,
@@ -628,8 +631,9 @@ impl HistoryStore {
 
                 if let Ok(content) = std::fs::read_to_string(&path) {
                     let lines: Vec<&str> = content.lines().collect();
-                    let mut keep_lines = Vec::new();
-                    let mut found_recent_snapshot = false;
+                    // cutoff以降と起点となる直近スナップショット1件を残す
+                    let mut base_snapshot: Option<&str> = None;
+                    let mut recent_lines = Vec::new();
 
                     for line in &lines {
                         if line.trim().is_empty() {
@@ -641,18 +645,19 @@ impl HistoryStore {
                                 HistoryEntry::Delta { t, .. } => *t,
                             };
                             if t >= cutoff {
-                                keep_lines.push(*line);
-                                if matches!(entry, HistoryEntry::Snapshot { .. }) {
-                                    found_recent_snapshot = true;
-                                }
-                            } else if matches!(entry, HistoryEntry::Snapshot { .. })
-                                && !found_recent_snapshot
-                            {
-                                // ベーススナップショットは保持
-                                keep_lines.push(*line);
+                                recent_lines.push(*line);
+                            } else if matches!(entry, HistoryEntry::Snapshot { .. }) {
+                                // 最後の古いスナップショットを起点として残す
+                                base_snapshot = Some(*line);
                             }
                         }
                     }
+
+                    let mut keep_lines = Vec::new();
+                    if let Some(base) = base_snapshot {
+                        keep_lines.push(base);
+                    }
+                    keep_lines.extend(recent_lines);
 
                     if keep_lines.len() < lines.len() {
                         if keep_lines.is_empty() {
@@ -1274,15 +1279,12 @@ fn line_lcs<'a>(a: &[&'a str], b: &[&'a str]) -> Vec<&'a str> {
     result
 }
 
-/// パスのSipHashを計算（lib.rs:file_to_id と同じ方式）
+/// パスのハッシュを計算（lib.rs:file_to_id と同じ方式）
 pub fn path_hash(path: &str) -> String {
     let canonical =
         dunce::canonicalize(path).unwrap_or_else(|_| std::path::PathBuf::from(path));
     let path_str = canonical.to_string_lossy();
-    let mut hasher = DefaultHasher::new();
-    Hasher::write(&mut hasher, path_str.as_bytes());
-    let hash = Hasher::finish(&hasher);
-    format!("{:016x}", hash)
+    format!("{:016x}", crate::stable_hash::fnv1a64(path_str.as_bytes()))
 }
 
 // --- ヘルパー ---
@@ -1356,6 +1358,35 @@ fn save_index_to_disk(index: &HashMap<String, IndexEntry>) {
     if let Ok(json) = serde_json::to_string(index) {
         std::fs::write(&path, json).ok();
     }
+}
+
+/// 旧ハッシュ名の履歴ファイルを現行の安定ハッシュ名へリネームする
+/// パスを持つ実ファイルのエントリのみ対象とし、衝突時はスキップする
+fn migrate_legacy_hashes(index: &mut HashMap<String, IndexEntry>) -> bool {
+    let mut changed = false;
+    let old_ids: Vec<String> = index.keys().cloned().collect();
+    for old_id in old_ids {
+        let file_path = match index.get(&old_id) {
+            Some(e) if !e.file_path.is_empty() => e.file_path.clone(),
+            _ => continue,
+        };
+        let new_id = path_hash(&file_path);
+        if new_id == old_id {
+            continue;
+        }
+        let old_file = history_file_path(&old_id);
+        let new_file = history_file_path(&new_id);
+        if !old_file.exists() || new_file.exists() {
+            continue;
+        }
+        if std::fs::rename(&old_file, &new_file).is_ok() {
+            if let Some(entry) = index.remove(&old_id) {
+                index.insert(new_id, entry);
+            }
+            changed = true;
+        }
+    }
+    changed
 }
 
 /// JSONLファイルからインデックスをビルド（初回マイグレーション用）

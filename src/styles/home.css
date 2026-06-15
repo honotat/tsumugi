@@ -750,6 +750,9 @@
   flex: 1;
   overflow-y: auto;
   padding: 8px 16px 0;
+  gap: 4px;
+  display: flex;
+  flex-direction: column;
 }
 
 .history-entry-item {

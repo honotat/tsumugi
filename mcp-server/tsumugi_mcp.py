@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -25,12 +26,14 @@ mcp = FastMCP(name="tsumugi")
 
 def _instance_dir() -> Path:
     """プラットフォームに応じたインスタンスディレクトリを返す."""
+    # Rust側の temp_dir() と基準を揃える
+    base = Path(tempfile.gettempdir())
     if sys.platform == "win32":
         username = os.environ.get("USERNAME", "default")
-        return Path(os.environ.get("TEMP", "/tmp")) / f"tsumugi-{username}"
+        return base / f"tsumugi-{username}"
     else:
         uid = os.getuid()
-        return Path(f"/tmp/tsumugi-{uid}")
+        return base / f"tsumugi-{uid}"
 
 
 def _read_connection(instance_id: str) -> tuple[str, str]:
@@ -86,12 +89,20 @@ def _find_tsumugi_bin() -> str:
     found = shutil.which("tsumugi")
     if found:
         return found
-    # macOS: よくあるインストール先
-    candidates = [
-        Path.home() / ".cargo" / "bin" / "tsumugi",
-        Path("/usr/local/bin/tsumugi"),
-        Path("/opt/homebrew/bin/tsumugi"),
-    ]
+    # PATH に無い場合のインストール先をプラットフォーム別に探す
+    if sys.platform == "win32":
+        candidates = [
+            Path.home() / ".cargo" / "bin" / "tsumugi.exe",
+            Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local")))
+            / "Microsoft" / "WinGet" / "Links" / "tsumugi.exe",
+            Path.home() / "scoop" / "shims" / "tsumugi.exe",
+        ]
+    else:
+        candidates = [
+            Path.home() / ".cargo" / "bin" / "tsumugi",
+            Path("/usr/local/bin/tsumugi"),
+            Path("/opt/homebrew/bin/tsumugi"),
+        ]
     for p in candidates:
         if p.exists():
             return str(p)
@@ -127,6 +138,12 @@ def _launch_process(title: str | None = None) -> str:
         if port_file.exists():
             break
         time.sleep(0.25)
+    else:
+        # 待機しても接続情報が書き出されなかった場合は失敗とみなす
+        raise RuntimeError(
+            f"tsumugi launched (id={auto_id}) but its connection file did not "
+            f"appear within 5s: {port_file}"
+        )
 
     return auto_id
 

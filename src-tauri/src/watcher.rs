@@ -37,20 +37,27 @@ impl FileWatcher {
                 for event in events {
                     if event.kind == DebouncedEventKind::Any {
                         // ファイルを再読み込みし、状態とフロントエンドを更新
-                        if let Ok(content) = std::fs::read_to_string(&watch_path) {
+                        if let Ok(content) = crate::commands::read_document(&watch_path) {
+                            let mut should_emit = false;
                             {
                                 let states = app_handle.state::<WindowStates>();
                                 let mut states = states.lock().unwrap();
                                 if let Some(state) = states.get_mut(&label) {
-                                    state.current_content = content.clone();
-                                    state.dirty = false;
+                                    // 自分の保存で同じ内容が書かれた場合は無視する
+                                    if state.current_content != content {
+                                        state.current_content = content.clone();
+                                        state.dirty = false;
+                                        should_emit = true;
+                                    }
                                 }
                             }
-                            let _ = app_handle.emit_to(
-                                &label as &str,
-                                "content-update",
-                                serde_json::json!({ "body": content }),
-                            );
+                            if should_emit {
+                                let _ = app_handle.emit_to(
+                                    &label as &str,
+                                    "content-update",
+                                    serde_json::json!({ "body": content }),
+                                );
+                            }
                         }
                         break;
                     }

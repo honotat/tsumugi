@@ -21,6 +21,8 @@ export class EditorController {
   private splitPreviewContainer: HTMLElement | null = null;
   /** スプリットプレビューのデバウンスタイマー */
   private splitPreviewTimer: ReturnType<typeof setTimeout> | null = null;
+  /** textarea 監視用 ResizeObserver */
+  private resizeObserver: ResizeObserver | null = null;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -50,6 +52,7 @@ export class EditorController {
   exitEditMode(): string {
     this.syncFormInputs();
     this.syncFromEdit();
+    this.disconnectResizeObserver();
     document.body.classList.remove('edit-mode');
     document.body.classList.remove('split-mode');
     return this.currentContent;
@@ -153,6 +156,7 @@ export class EditorController {
   // --- ビューモード ---
 
   private renderView(): void {
+    this.disconnectResizeObserver();
     renderMarkdown(this.currentContent, this.container).then(() => {
       this.attachFormEvents();
     });
@@ -275,7 +279,7 @@ export class EditorController {
     textarea.value = this.currentContent;
     textarea.spellcheck = false;
 
-    textarea.addEventListener('input', () => {
+    const applyInput = () => {
       this.currentContent = textarea.value;
       this.updateLineNumbers();
       this.autoResizeTextarea();
@@ -283,7 +287,18 @@ export class EditorController {
       if (this.onContentChange) {
         this.onContentChange(this.currentContent);
       }
+    };
+    textarea.addEventListener('input', (e) => {
+      // IME変換中は表示更新のみ行う
+      if ((e as InputEvent).isComposing) {
+        this.currentContent = textarea.value;
+        this.updateLineNumbers();
+        this.autoResizeTextarea();
+        return;
+      }
+      applyInput();
     });
+    textarea.addEventListener('compositionend', applyInput);
 
     // スクロール同期（行番号とtextarea間、フォールバック用）
     textarea.addEventListener('scroll', () => {
@@ -297,14 +312,23 @@ export class EditorController {
     this.updateLineNumbers();
     this.autoResizeTextarea();
 
-    // リサイズ時に折り返しが変わるため行番号を再計算する
-    const ro = new ResizeObserver(() => {
+    // リサイズで折り返しが変わるため行番号を再計算する
+    this.disconnectResizeObserver();
+    this.resizeObserver = new ResizeObserver(() => {
       this.updateLineNumbers();
       this.autoResizeTextarea();
     });
-    ro.observe(textarea);
+    this.resizeObserver.observe(textarea);
 
     textarea.focus();
+  }
+
+  /** textarea 監視用 ResizeObserver を解放する */
+  private disconnectResizeObserver(): void {
+    if (this.resizeObserver) {
+      this.resizeObserver.disconnect();
+      this.resizeObserver = null;
+    }
   }
 
   /** textarea の値を更新し行番号も再描画する共通ヘルパー */

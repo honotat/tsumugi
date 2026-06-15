@@ -360,7 +360,10 @@ listen('menu-action', (event) => {
       debounced('file_reload', () => reloadCurrentFile());
       break;
     case 'file_export_pdf':
-      debounced('file_export_pdf', () => exportAsPdf(currentTitle));
+      debounced('file_export_pdf', () => {
+        currentContent = editorController.getCurrentContent();
+        exportAsPdf(currentTitle, currentContent);
+      });
       break;
     case 'file_export_html':
       debounced('file_export_html', () => {
@@ -498,7 +501,10 @@ document.addEventListener('keydown', (e) => {
     case 'E':
       if (e.shiftKey) {
         e.preventDefault();
-        debounced('file_export_pdf', () => exportAsPdf(currentTitle));
+        debounced('file_export_pdf', () => {
+          currentContent = editorController.getCurrentContent();
+          exportAsPdf(currentTitle, currentContent);
+        });
       }
       break;
     case 'p':

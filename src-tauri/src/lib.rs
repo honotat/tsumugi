@@ -7,6 +7,7 @@ mod ipc;
 mod menu;
 pub(crate) mod recent;
 mod state;
+mod stable_hash;
 mod tags;
 mod pdf;
 mod watcher;
@@ -90,7 +91,7 @@ pub(crate) fn open_document_window(
         let abs_path = dunce::canonicalize(f)
             .unwrap_or_else(|_| std::path::PathBuf::from(f));
         let abs_str = normalize_path(&abs_path.to_string_lossy());
-        match std::fs::read_to_string(&abs_path) {
+        match commands::read_document(&abs_path) {
             Ok(c) => {
                 let t = abs_path
                     .file_stem()
@@ -111,6 +112,7 @@ pub(crate) fn open_document_window(
     ws.content_explicitly_set = file.is_some() || body.is_some();
     if let Some(ref fp) = file_path {
         ws.saved_path = Some(fp.clone());
+        ws.path_disclosure = true;
     }
 
     // WindowStates に挿入
@@ -319,7 +321,7 @@ pub fn run() {
         let abs_path = dunce::canonicalize(file_path)
             .unwrap_or_else(|_| std::path::PathBuf::from(file_path));
         let abs_path_str = normalize_path(&abs_path.to_string_lossy());
-        match std::fs::read_to_string(&abs_path) {
+        match commands::read_document(&abs_path) {
             Ok(content) => {
                 let title = abs_path
                     .file_stem()
@@ -341,6 +343,7 @@ pub fn run() {
     app_state.content_explicitly_set = content_explicitly_set;
     if let Some(ref fp) = resolved_file_path {
         app_state.saved_path = Some(fp.clone());
+        app_state.path_disclosure = true;
     }
 
     // 初期状態を準備
@@ -691,9 +694,7 @@ fn file_to_id(file: &str) -> String {
     let canonical = dunce::canonicalize(file)
         .unwrap_or_else(|_| std::path::PathBuf::from(file));
     let path_str = canonical.to_string_lossy();
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    std::hash::Hasher::write(&mut hasher, path_str.as_bytes());
-    let hash = std::hash::Hasher::finish(&hasher);
+    let hash = stable_hash::fnv1a64(path_str.as_bytes());
     let name = std::path::Path::new(file)
         .file_name()
         .map(|f| f.to_string_lossy().to_string())
