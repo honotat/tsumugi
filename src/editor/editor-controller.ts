@@ -383,21 +383,28 @@ export class EditorController {
     const lineHeight = parseFloat(styles.lineHeight);
 
     // ミラー要素でtextareaと同じ折り返しを再現し、各行の表示行数を測定する
-    const mirror = document.createElement('div');
-    mirror.style.position = 'absolute';
-    mirror.style.visibility = 'hidden';
-    mirror.style.whiteSpace = 'pre-wrap';
-    mirror.style.wordWrap = 'break-word';
-    mirror.style.overflow = 'hidden';
-    for (const prop of ['fontFamily', 'fontSize', 'fontWeight', 'letterSpacing', 'lineHeight', 'padding', 'width', 'borderWidth', 'boxSizing'] as const) {
-      (mirror.style as any)[prop] = (styles as any)[prop];
+    // 全行ぶんのミラーを先に配置してからまとめて高さを読み、強制レイアウトを1回に抑える
+    const mirrorHost = document.createElement('div');
+    mirrorHost.style.position = 'absolute';
+    mirrorHost.style.visibility = 'hidden';
+    const mirrors: HTMLDivElement[] = [];
+    for (let i = 0; i < lines.length; i++) {
+      const mirror = document.createElement('div');
+      mirror.style.whiteSpace = 'pre-wrap';
+      mirror.style.wordWrap = 'break-word';
+      mirror.style.overflow = 'hidden';
+      for (const prop of ['fontFamily', 'fontSize', 'fontWeight', 'letterSpacing', 'lineHeight', 'padding', 'width', 'borderWidth', 'boxSizing'] as const) {
+        (mirror.style as any)[prop] = (styles as any)[prop];
+      }
+      mirror.textContent = lines[i] || String.fromCharCode(0xa0);
+      mirrorHost.appendChild(mirror);
+      mirrors.push(mirror);
     }
-    document.body.appendChild(mirror);
+    document.body.appendChild(mirrorHost);
 
     const fragment = document.createDocumentFragment();
     for (let i = 0; i < lines.length; i++) {
-      mirror.textContent = lines[i] || '\u00a0';
-      const visualLines = Math.max(1, Math.round(mirror.offsetHeight / lineHeight));
+      const visualLines = Math.max(1, Math.round(mirrors[i].offsetHeight / lineHeight));
 
       const span = document.createElement('span');
       span.textContent = String(i + 1);
@@ -407,7 +414,7 @@ export class EditorController {
       fragment.appendChild(span);
     }
 
-    document.body.removeChild(mirror);
+    document.body.removeChild(mirrorHost);
     lineNumbers.textContent = '';
     lineNumbers.appendChild(fragment);
   }
