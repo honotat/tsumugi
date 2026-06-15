@@ -1,4 +1,5 @@
 import { renderMarkdown } from '../renderer';
+import { openUrl } from '@tauri-apps/plugin-opener';
 
 /**
  * EditorController はビューモード、エディットモード、スプリットモードを管理する。
@@ -26,6 +27,28 @@ export class EditorController {
 
   constructor(container: HTMLElement) {
     this.container = container;
+    this.container.addEventListener('click', (e) => this.handleLinkClick(e));
+  }
+
+  /** レンダリング結果内のリンククリックを横取りし外部URLは既定アプリで開く */
+  private handleLinkClick(e: MouseEvent): void {
+    const anchor = (e.target as HTMLElement)?.closest('a');
+    if (!anchor) return;
+    const href = anchor.getAttribute('href');
+    if (!href) return;
+    // ページ内アンカーは従来どおりアプリ内スクロールに任せる
+    if (href.startsWith('#')) return;
+    // file: やOS独自スキームを既定ハンドラに渡さないようスキームを限定する
+    let url: URL;
+    try {
+      url = new URL(href, window.location.href);
+    } catch {
+      return;
+    }
+    const allowed = ['http:', 'https:', 'mailto:', 'tel:'];
+    if (!allowed.includes(url.protocol)) return;
+    e.preventDefault();
+    openUrl(url.toString()).catch(() => {});
   }
 
   /** コンテンツ変更時のコールバックを設定 */
